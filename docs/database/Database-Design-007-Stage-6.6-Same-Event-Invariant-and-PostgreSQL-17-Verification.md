@@ -1,6 +1,6 @@
 # Database Design 007 — Stage 6.6 — Same-Event Invariant and PostgreSQL 17 Verification
 
-**Status:** Protocol design agreed for subsequent migration design; production SQL not authorised  
+**Status:** S6.6 protocol design frozen; production SQL and migration application not authorised  
 **Date recorded:** 2026-10-25  
 **Depends on:** Stage 5 frozen structural design; Stage 6.4 backfill execution and verification decisions; Stage 6.5 PostgreSQL types and column definitions  
 **Scope:** Consistency between attendance routes and event occurrences, transaction coordination, deferred validation, controlled writes, prototype verification and outstanding production requirements.
