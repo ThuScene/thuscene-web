@@ -1,0 +1,162 @@
+Starting disposable PostgreSQL 17 container: thuscene-s66-pg17-19980
+CREATE TABLE
+CREATE TABLE
+CREATE TABLE
+CREATE TABLE
+CREATE FUNCTION
+CREATE TRIGGER
+CREATE TRIGGER
+CREATE TRIGGER
+CREATE FUNCTION
+CREATE TRIGGER
+CREATE TRIGGER
+CREATE TRIGGER
+CREATE FUNCTION
+CREATE FUNCTION
+CREATE FUNCTION
+CREATE FUNCTION
+INSERT 0 2
+INSERT 0 1
+INSERT 0 1
+CREATE ROLE
+REVOKE
+GRANT
+REVOKE
+REVOKE
+REVOKE
+REVOKE
+REVOKE
+GRANT
+GRANT
+GRANT
+GRANT
+Test 1/10: occurrence move obtains lock first
+TRUNCATE TABLE
+INSERT 0 2
+INSERT 0 1
+INSERT 0 1
+PASS (expected rejection): link-after-move
+PASS: no invalid link committed after occurrence move
+Test 2/10: link creation obtains lock first
+TRUNCATE TABLE
+INSERT 0 2
+INSERT 0 1
+INSERT 0 1
+PASS (expected rejection): move-after-link
+PASS: existing link remains consistent after rejected move
+Test 3/10: consistent multi-step move commits
+TRUNCATE TABLE
+INSERT 0 2
+INSERT 0 1
+INSERT 0 1
+BEGIN
+ s66_create_link 
+-----------------
+ 
+(1 row)
+
+ s66_move_route 
+----------------
+ 
+(1 row)
+
+ s66_move_occurrence 
+---------------------
+ 
+(1 row)
+
+COMMIT
+PASS: multi-step consistent change committed
+Test 4/10: direct uncoordinated write is rejected
+TRUNCATE TABLE
+INSERT 0 2
+INSERT 0 1
+INSERT 0 1
+PASS (expected rejection): direct-insert-without-lock
+Test 5/10: route move obtains lock first
+TRUNCATE TABLE
+INSERT 0 2
+INSERT 0 1
+INSERT 0 1
+PASS (expected rejection): link-after-route-move
+PASS: no invalid link committed after route move
+Test 6/10: direct route and occurrence updates are rejected
+TRUNCATE TABLE
+INSERT 0 2
+INSERT 0 1
+INSERT 0 1
+PASS (expected rejection): direct-route-update-without-lock
+PASS (expected rejection): direct-occurrence-update-without-lock
+PASS: rejected direct parent updates left fixture unchanged
+Test 7/10: link deletion and parent/event cascades
+TRUNCATE TABLE
+INSERT 0 2
+INSERT 0 1
+INSERT 0 1
+ s66_create_link 
+-----------------
+ 
+(1 row)
+
+ s66_delete_link 
+-----------------
+ 
+(1 row)
+
+PASS: controlled link deletion removed the link
+ s66_create_link 
+-----------------
+ 
+(1 row)
+
+DELETE 1
+PASS: deleting a route cascaded to its link
+TRUNCATE TABLE
+INSERT 0 2
+INSERT 0 1
+INSERT 0 1
+ s66_create_link 
+-----------------
+ 
+(1 row)
+
+DELETE 1
+PASS: deleting an occurrence cascaded to its link
+TRUNCATE TABLE
+INSERT 0 2
+INSERT 0 1
+INSERT 0 1
+ s66_create_link 
+-----------------
+ 
+(1 row)
+
+DELETE 1
+PASS: deleting the owning event cascaded through both parents and the link
+Test 8/10: failed multi-step transaction rolls back cleanly
+TRUNCATE TABLE
+INSERT 0 2
+INSERT 0 1
+INSERT 0 1
+PASS (expected rejection): rollback-after-route-move
+PASS: prior mutation rolled back and a subsequent transaction acquired the lock
+Test 9/10: unsupported isolation level is rejected
+PASS (expected rejection): repeatable-read-rejected
+Test 10/10: application-role privilege boundary
+TRUNCATE TABLE
+INSERT 0 2
+INSERT 0 1
+INSERT 0 1
+PASS (expected rejection): app-role-direct-insert-denied
+BEGIN
+SET
+ s66_create_link 
+-----------------
+ 
+(1 row)
+
+COMMIT
+PASS: app role used the controlled function while direct table DML was denied
+
+ALL EXTENDED S6.6 PROTOTYPE TESTS PASSED
+Note: disposable prototype evidence only; this is not the production schema or final S6.6 design.
