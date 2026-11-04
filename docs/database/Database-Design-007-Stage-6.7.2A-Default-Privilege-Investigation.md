@@ -1,7 +1,7 @@
 # ThuScene Database Design 007 — Stage 6.7.2A
 ## Default-Privilege Investigation and Proposed Policy
 
-**Status:** Investigation complete; proposed policy for review and local testing. Not implemented.  
+**Status:** Investigation and disposable PostgreSQL 17 policy test complete; proposed policy for review. Not implemented in production.  
 **Evidence date:** 2026-11-04  
 **Environment:** Live ThuScene Supabase project, inspected read-only through the SQL Editor  
 **Scope:** PostgreSQL default privileges for objects created in the `public` schema, with particular attention to objects created by `postgres` and `supabase_admin`.
@@ -150,13 +150,13 @@ The proposed policy removes automatic broad privileges for future `postgres`-cre
 
 Before a production migration is considered:
 
-1. Test the proposed statements against a disposable PostgreSQL 17 database.
-2. Verify both global and schema-specific default ACL behaviour.
-3. Create representative tables, sequences, functions, and procedures under the intended creator role and inspect effective privileges.
-4. Confirm that owner privileges remain intact.
-5. Confirm that `PUBLIC`, `anon`, `authenticated`, and `service_role` receive only the intended privileges.
+1. ~~Test the proposed statements against a disposable PostgreSQL 17 database.~~ **Completed 2026-11-04.**
+2. ~~Verify global and schema-specific default ACL behaviour.~~ **Completed in the disposable PostgreSQL 17 test.**
+3. ~~Create representative tables, sequences, functions, and procedures under the intended creator role and inspect effective privileges.~~ **Completed in the disposable PostgreSQL 17 test.**
+4. ~~Confirm that owner privileges remain intact.~~ **Completed in the disposable PostgreSQL 17 test.**
+5. ~~Confirm that `PUBLIC`, `anon`, `authenticated`, and `service_role` receive only the intended privileges.~~ **Completed in the disposable PostgreSQL 17 test, including explicit per-object grants.**
 6. Check whether any Supabase-managed workflow or existing importer operation depends on the defaults being removed.
-7. Review the exact migration SQL and its execution identity before approval.
+7. Review the exact migration SQL and its execution identity before approval. The available evidence strongly supports `postgres` as the execution role, but the migration runner's identity has not yet been directly observed from within a migration.
 8. Apply no production change without a separate, explicit approval and a documented recovery plan.
 
 Do not use `db reset --linked` or any other reset operation against the linked production project. Do not rewrite migrations that have already been applied. Do not modify `supabase_admin` defaults as part of this work.
@@ -167,9 +167,9 @@ Do not use `db reset --linked` or any other reset operation against the linked p
 
 **Proposed resolution:** Tighten defaults for future `postgres`-created objects as described in Section 6, while leaving `supabase_admin` defaults and all existing object grants unchanged.
 
-**Current status:** Investigation documented; proposed policy not yet implemented or approved for production.
+**Current status:** Investigation documented and local PostgreSQL 17 policy test passed. The proposed policy has not been implemented or approved for production.
 
-**Next step:** Perform a disposable local PostgreSQL 17 migration test. Review its SQL and verification evidence before deciding whether to create a production migration.
+**Next step:** Complete the production migration design review, including the remaining migration-runner identity qualification and deployment/recovery checks. Only then decide whether to create a production migration.
 
 ---
 
@@ -181,3 +181,100 @@ This investigation builds on:
 - [Stage 6.6 — Same-Event Invariant and PostgreSQL 17 Verification](Database-Design-007-Stage-6.6-Same-Event-Invariant-and-PostgreSQL-17-Verification.md)
 
 It does not supersede the frozen database specification or authorise a production schema or privilege change.
+
+
+## 10. Local PostgreSQL 17 policy test and execution-identity investigation
+
+### 10.1 Disposable PostgreSQL 17 test
+
+A disposable PostgreSQL 17.11 container was used to test the proposed default-privilege policy. The test created representative tables, a sequence, a function, and a procedure under a dedicated object-creator role, then inspected effective privileges.
+
+Results:
+
+- Newly created tables retained owner privileges; the application roles did not receive the unwanted default table privileges.
+- Newly created sequences remained accessible to the owner only.
+- Newly created functions and procedures did not inherit PUBLIC EXECUTE after the global default-privilege revoke.
+- An explicit table SELECT grant and an explicit function EXECUTE grant worked for the selected roles.
+- All test assertions passed.
+
+The test was performed in a disposable local database only. It did not alter the live Supabase project and does not simulate every aspect of Supabase's migration infrastructure or API layer. The runnable test and report are recorded under:
+
+- docs/database/tests/s6-7-2a-postgres17/README.md
+- docs/database/tests/s6-7-2a-postgres17/run-s6-7-2a-postgres17.sh
+
+### 10.2 Supabase CLI login-role membership and local role-switching test
+
+Read-only inspection of the live Supabase role membership found that the temporary CLI login role cli_login_postgres is a member of postgres, with INHERIT FALSE, SET TRUE, and no admin option.
+
+A disposable PostgreSQL test role, cli_login_sim, was configured with the corresponding membership options. The test established:
+
+- With session_user = cli_login_sim and current_user = cli_login_sim, ALTER DEFAULT PRIVILEGES FOR ROLE postgres failed with permission denied.
+- After SET ROLE postgres, the session reported session_user = cli_login_sim and current_user = postgres; the same default-privilege change succeeded.
+
+This confirms that role switching is a viable way for a CLI login role with the observed membership options to perform the proposed change. It is a local PostgreSQL simulation, not direct evidence of the Supabase migration runner's internal execution sequence.
+
+### 10.3 Linked Supabase CLI query identity
+
+Using the installed Supabase CLI v2.122.0, the read-only linked query:
+
+SELECT session_user, current_user, current_setting('role') AS active_role;
+
+returned:
+
+| Setting | Result |
+|---|---|
+| session_user | postgres |
+| current_user | postgres |
+| active_role | none |
+
+This establishes the identity reported by the CLI's linked SQL-query facility. It does not conclusively establish the identity used by the separate supabase db push migration execution path. The migration runner's identity remains to be directly verified or otherwise established from authoritative CLI behaviour before relying on it for production deployment.
+
+### 10.4 Importer privilege review
+
+The inspected BOV importer script, scripts/import-bov-four-test.ts, creates a Supabase client using SUPABASE_SECRET_KEY in server-side code. It performs these operations:
+
+| Table | Operations observed |
+|---|---|
+| sources | SELECT, INSERT, and read returned ID |
+| venues | SELECT, INSERT |
+| categories | SELECT |
+| events | SELECT, INSERT, UPDATE, and read returned IDs |
+| event_categories | UPSERT using conflict target event_id,category_id |
+| event_sources | SELECT, INSERT, UPDATE |
+| event_occurrences | SELECT, INSERT, UPDATE, and read returned IDs |
+| ticket_offers | DELETE, INSERT |
+
+A live privilege check confirmed that service_role currently has all eight standard table privileges on these eight tables. This describes current grants only; it does not create grants on future objects. The importer review does not justify broad automatic privileges for future tables. Any future importer access to a new object should be granted explicitly according to the operations required.
+
+The client code and current grants are consistent with the service-role access model. The client snippet alone does not independently prove the PostgreSQL role used for every API request.
+
+### 10.5 Historical migration reconciliation
+
+The remote Supabase migration history contained two applied versions:
+
+| Remote version | Timestamp (UTC) | Existing tracked SQL file |
+|---|---|---|
+| 20260919161304 | 2026-09-19 16:13:04 | docs/database/migrations/005_taxonomy_v1.sql |
+| 20260919163108 | 2026-09-19 16:31:08 | docs/database/migrations/006_security_harden_database_functions.sql |
+
+Byte-for-byte copies were placed in the standard Supabase CLI migration directory using the exact remote version identifiers:
+
+- supabase/migrations/20260919161304_taxonomy_v1.sql
+- supabase/migrations/20260919163108_security_harden_database_functions.sql
+
+SHA-256 verification confirmed that each copy matches its original:
+
+| File pair | SHA-256 |
+|---|---|
+| 005 original and CLI copy | 091b01eaee2de3db4990cf64012c7ba05ce5b47fbd8c21c14364659bb6e50e3b |
+| 006 original and CLI copy | 241d54eb812812ca4ffd8700785354bf4941c193f0a81928c928da33b9bd9535 |
+
+A subsequent npx supabase migration list --linked showed both versions matched in Local and Remote columns, with no pending migrations. No migration repair, db push, reset, or production SQL change was performed during reconciliation.
+
+### 10.6 Execution-identity conclusion and outstanding limitation
+
+The combined evidence supports the expectation that Supabase CLI migration operations can execute with effective role postgres: the live temporary CLI login role has SET membership for postgres; the local simulation demonstrates that switching to postgres permits the required default-privilege change; and the linked CLI SQL-query facility reports current_user = postgres.
+
+However, the linked SQL-query facility and migration runner are distinct execution paths. The identity has not yet been directly observed from within a migration executed by db push. Therefore, the production migration must not rely on an unverified assumption about this behaviour. The exact deployment method and effective execution identity must be confirmed before production application.
+
+**Production status:** No S6.7.2A production migration has been created or applied. No production default privileges have been changed.
